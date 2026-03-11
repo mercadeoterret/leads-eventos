@@ -237,6 +237,103 @@ st.markdown(
 )
 
 # ─────────────────────────────────────────────
+# AUTH
+# ─────────────────────────────────────────────
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if st.session_state.authenticated:
+        return True
+    col1, col2, col3 = st.columns([1, 1.4, 1])
+    with col2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown('<div class="terret-header" style="text-align:center">TERRET</div>', unsafe_allow_html=True)
+        st.markdown('<div class="terret-sub" style="text-align:center;margin-bottom:2rem">Lead Mining · Eventos Deportivos</div>', unsafe_allow_html=True)
+        pwd = st.text_input("Contraseña", type="password", key="login_pwd", placeholder="••••••••")
+        if st.button("Entrar", key="login_btn"):
+            if pwd == st.secrets.get("APP_PASSWORD", "terret2024"):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Contraseña incorrecta")
+    return False
+
+
+# ─────────────────────────────────────────────
+# GOOGLE SHEETS
+# ─────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def get_gspread_client():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return gspread.authorize(creds)
+
+
+def get_or_create_sheet():
+    gc = get_gspread_client()
+    try:
+        sh = gc.open(SHEET_NAME)
+    except gspread.SpreadsheetNotFound:
+        sh = gc.create(SHEET_NAME)
+        sh.share(st.secrets["gcp_service_account"]["client_email"],
+                 perm_type="user", role="writer")
+    try:
+        ws = sh.worksheet(WORKSHEET)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=WORKSHEET, rows=1000, cols=len(COLUMNS))
+        ws.append_row(COLUMNS)
+        try:
+            ws.format("A1:N1", {
+                "textFormat": {"bold": True, "fontSize": 10},
+                "backgroundColor": {"red": 0.06, "green": 0.06, "blue": 0.12},
+            })
+        except Exception:
+            pass
+    return ws
+
+
+def load_leads() -> pd.DataFrame:
+    try:
+        ws = get_or_create_sheet()
+        data = ws.get_all_records()
+        if not data:
+            return pd.DataFrame(columns=COLUMNS)
+        df = pd.DataFrame(data)
+        for col in COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        return df[COLUMNS]
+    except Exception as e:
+        st.error("Error cargando Sheets: " + str(e))
+        return pd.DataFrame(columns=COLUMNS)
+
+
+def save_leads(rows: list[dict]) -> int:
+    ws = get_or_create_sheet()
+    existing = ws.get_all_records()
+    existing_names = {r.get("Evento", "").lower().strip() for r in existing}
+    added = 0
+    for row in rows:
+        key = row.get("Evento", "").lower().strip()
+        if not key or key in existing_names:
+            continue
+        ws.append_row([row.get(c, "") for c in COLUMNS], value_input_option="USER_ENTERED")
+        existing_names.add(key)
+        added += 1
+    return added
+
+
+def update_lead_field(row_idx: int, field: str, value: str):
+    ws = get_or_create_sheet()
+    col_idx = COLUMNS.index(field) + 1
+    ws.update_cell(row_idx + 2, col_idx, value)
+
+
+# ─────────────────────────────────────────────
 
 # ─────────────────────────────────────────────
 # CONSTANTS
