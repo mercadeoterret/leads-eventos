@@ -412,6 +412,12 @@ def _rows_from_js(js_events: list[dict]) -> list[dict]:
 # ─────────────────────────────────────────────
 import re as _re
 
+# ─────────────────────────────────────────────
+# SCRAPING ENGINE — ScraperAPI
+# api.scraperapi.com rota IPs residenciales,
+# bypasea bloqueos, corre desde Streamlit Cloud.
+# ─────────────────────────────────────────────
+
 EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 PHONE_RE = re.compile(r"(?:\+?57[\s-]?)?3\d{2}[\s-]?\d{3}[\s-]?\d{4}")
 INSTA_RE = re.compile(r"instagram\.com/([A-Za-z0-9_.]+)")
@@ -422,7 +428,7 @@ CITIES_CO = [
     "bucaramanga","pereira","manizales","armenia","santa marta","ibagué","ibague",
     "villavicencio","cúcuta","cucuta","pasto","montería","monteria","sincelejo",
     "valledupar","neiva","popayán","popayan","tunja","rionegro","envigado",
-    "bello","itagüí","itagui","girardot",
+    "bello","itagüí","itagui","girardot","zipaquirá","zipaquira",
 ]
 
 DEFAULT_SOURCES = [
@@ -430,11 +436,35 @@ DEFAULT_SOURCES = [
     {"label": "Sportadictos — Carreras", "url": "https://sportadictos.com/categoria/carreras-populares/"},
     {"label": "Correr.co",               "url": "https://correr.co/carreras/"},
     {"label": "TravesiaDeportiva",       "url": "https://travesiadeportiva.com/"},
-    {"label": "Ciclismo a Fondo CO",     "url": "https://www.ciclismoafondo.es/colombia/"},
+    {"label": "Atletrack — Lista",       "url": "https://www.atletrack.com/eventos/list/"},
 ]
 
-def _gas_url() -> str:
-    return st.secrets.get("WEBAPP_URL", "")
+SCRAPER_API = "https://api.scraperapi.com/"
+
+
+def _scraper_key() -> str:
+    return st.secrets.get("SCRAPERAPI_KEY", "")
+
+
+def _fetch(url: str) -> str | None:
+    """Fetch a URL via ScraperAPI — bypasses IP blocks."""
+    key = _scraper_key()
+    if not key:
+        return None
+    params = {
+        "api_key":      key,
+        "url":          url,
+        "country_code": "co",
+        "render":       "false",
+    }
+    try:
+        r = requests.get(SCRAPER_API, params=params, timeout=60)
+        if r.status_code == 200 and len(r.text) > 500:
+            return r.text
+        return None
+    except Exception:
+        return None
+
 
 def _extract_contact(text: str) -> dict:
     emails = EMAIL_RE.findall(text)
@@ -448,44 +478,29 @@ def _extract_contact(text: str) -> dict:
         "Instagram": "@" + instas[0] if instas else "",
     }
 
+
 def _guess_tipo(text: str) -> str:
     t = text.lower()
     if any(k in t for k in ["cicl","bicicleta","bike","gran fondo"]): return "Ciclismo"
-    if "mtb" in t:   return "MTB"
+    if "mtb"   in t: return "MTB"
     if "trail" in t: return "Trail"
     if "triat" in t: return "Triatlón"
     if "duat"  in t: return "Duatlón"
     return "Running"
 
+
 def _extract_city(text: str) -> str:
     tl = text.lower()
     return next((c.title() for c in CITIES_CO if c in tl), "Colombia")
 
-def _fetch_via_gas(target_url: str) -> str | None:
-    """Fetch a URL through the Google Apps Script proxy."""
-    gas = _gas_url()
-    if not gas:
-        return None
-    try:
-        proxy_url = gas + "?action=scrape&url=" + requests.utils.quote(target_url, safe="")
-        r = requests.get(proxy_url, timeout=30)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        if not data.get("ok"):
-            return None
-        return data.get("html", "")
-    except Exception:
-        return None
 
 def _parse_html(html: str, base_url: str, fuente: str) -> list[dict]:
-    """Extract events from raw HTML using multi-strategy parser."""
     from urllib.parse import urljoin
     soup = BeautifulSoup(html, "html.parser")
-    results = []
+    results: list[dict] = []
     seen: set[str] = set()
 
-    def _add(name, href, text, fecha=""):
+    def add(name, href, text, fecha=""):
         name = (name or "").strip()[:180]
         if not name or len(name) < 5 or name.lower() in seen:
             return
@@ -501,21 +516,23 @@ def _parse_html(html: str, base_url: str, fuente: str) -> list[dict]:
             fecha=fecha, ciudad=ciudad, web=web, fuente=fuente, **contact,
         ))
 
-    # Strategy 1: Tribe Events Calendar (Atletrack uses this)
+    # Strategy 1: Tribe Events Calendar (Atletrack)
     tribe = soup.find_all("article", class_=re.compile(r"tribe_event|type-tribe", re.I))
     if tribe:
         for art in tribe[:60]:
-            a    = art.find("a", class_=re.compile(r"tribe-event-url", re.I)) or art.find("h2 a") or art.find("h3 a")
-            name = a.get_text(strip=True) if a else ""
-            href = a.get("href", "") if a else ""
-            abbr = art.find("abbr")
-            t    = art.find("time")
-            fecha = (abbr.get("title","") or abbr.get_text(strip=True)) if abbr else \
-                    ((t.get("datetime","") or t.get_text(strip=True)) if t else "")
-            _add(name, href, art.get_text(" ", strip=True), fecha)
-        if results: return results
+            a = (art.find("a", class_=re.compile(r"tribe-event-url", re.I))
+                 or art.find("h2 a") or art.find("h3 a") or art.find("a"))
+            name  = a.get_text(strip=True) if a else ""
+            href  = a.get("href", "") if a else ""
+            abbr  = art.find("abbr")
+            t_tag = art.find("time")
+            fecha = ((abbr.get("title","") or abbr.get_text(strip=True)) if abbr
+                     else ((t_tag.get("datetime","") or t_tag.get_text(strip=True)) if t_tag else ""))
+            add(name, href, art.get_text(" ", strip=True), fecha)
+        if results:
+            return results
 
-    # Strategy 2: WordPress <article> posts
+    # Strategy 2: WordPress <article>
     articles = soup.find_all("article")
     if articles:
         for art in articles[:60]:
@@ -525,65 +542,29 @@ def _parse_html(html: str, base_url: str, fuente: str) -> list[dict]:
             href = a.get("href","") if a else ""
             t    = art.find("time")
             fecha = (t.get("datetime","") or t.get_text(strip=True)) if t else ""
-            _add(name, href, art.get_text(" ", strip=True), fecha)
-        if results: return results
+            add(name, href, art.get_text(" ", strip=True), fecha)
+        if results:
+            return results
 
     # Strategy 3: Generic event cards
-    for tag in ["div", "li", "section"]:
+    for tag in ["div","li","section"]:
         cards = soup.find_all(tag, class_=re.compile(r"event|card|item|race|carrera|run", re.I))
         for c in cards[:60]:
             links = c.find_all("a", href=True)
             name  = links[0].get_text(strip=True) if links else c.get_text(strip=True)[:80]
             href  = links[0]["href"] if links else ""
-            _add(name, href, c.get_text(" ", strip=True))
-        if results: return results
+            add(name, href, c.get_text(" ", strip=True))
+        if results:
+            return results
 
-    # Strategy 4: Keyword-matching links
+    # Strategy 4: Keyword links
     for a in soup.find_all("a", href=True):
         name = a.get_text(strip=True)
-        if (3 <= len(name.split()) <= 12 and len(name) < 120 and
-                re.search(r"run|trail|cicl|triat|carrera|maratón|maraton|ciclismo|duatl|mtb|travesía|travesia|fondo", name, re.I)):
-            _add(name, a["href"], name)
+        if (3 <= len(name.split()) <= 12 and len(name) < 120
+                and re.search(r"run|trail|cicl|triat|carrera|maraton|maratón|ciclismo|duatl|mtb|travesía|travesia|fondo", name, re.I)):
+            add(name, a["href"], name)
 
     return results
-
-
-def scrape_sources(sources: list[dict]) -> tuple[list[dict], list[str], list[str]]:
-    """
-    Scrape a list of {label, url} dicts through the GAS proxy.
-    Returns (all_events, ok_labels, failed_labels).
-    """
-    gas = _gas_url()
-    if not gas:
-        return [], [], ["⚠️ WEBAPP_URL no configurado en secrets"]
-
-    all_events: list[dict] = []
-    ok: list[str] = []
-    failed: list[str] = []
-    seen_names: set[str] = set()
-
-    for src in sources:
-        label = src["label"]
-        url   = src["url"]
-        html  = _fetch_via_gas(url)
-        if not html:
-            failed.append(label)
-            continue
-        rows = _parse_html(html, url, label)
-        # deduplicate
-        new_rows = []
-        for r in rows:
-            k = r["Evento"].lower().strip()
-            if k and k not in seen_names:
-                seen_names.add(k)
-                new_rows.append(r)
-        if new_rows:
-            all_events.extend(new_rows)
-            ok.append(f"{label} ({len(new_rows)})")
-        else:
-            failed.append(label + " (sin eventos reconocibles)")
-
-    return all_events, ok, failed
 
 
 # ─────────────────────────────────────────────
@@ -595,12 +576,11 @@ def tab_descubrir():
         unsafe_allow_html=True,
     )
 
-    # Warn if GAS not configured
-    if not _gas_url():
+    if not _scraper_key():
         st.error(
-            "**WEBAPP_URL no está configurado en los secrets.**\n\n"
-            "Agrega tu Google Apps Script URL en Streamlit Cloud → App settings → Secrets:\n"
-            "`WEBAPP_URL = \"https://script.google.com/macros/s/.../exec\"`"
+            "**SCRAPERAPI_KEY no está en los secrets.**\n\n"
+            "Agrega en Streamlit Cloud → App settings → Secrets:\n"
+            "```\nSCRAPERAPI_KEY = \"tu_api_key\"\n```"
         )
         return
 
@@ -617,70 +597,68 @@ def tab_descubrir():
             with cols[i % 3]:
                 if st.checkbox(src["label"], value=True, key="src_" + str(i)):
                     selected.append(src)
-        sources_to_scrape = selected
-
+        sources = selected
     else:
         custom = st.text_input(
-            "URL del directorio", placeholder="https://www.atletrack.com/eventos",
+            "URL del directorio",
+            placeholder="https://www.atletrack.com/eventos",
             key="custom_url_input",
         )
-        sources_to_scrape = [{"label": custom.strip(), "url": custom.strip()}] if custom.strip() else []
+        sources = [{"label": custom.strip(), "url": custom.strip()}] if custom.strip() else []
 
     st.markdown(
         '<p class="mono-sm" style="color:#6B6B8A;margin-top:4px">'
-        '⚡ Scraping vía <strong style="color:#D4FF00">Google Apps Script</strong> '
-        '— corre en servidores de Google, sin bloqueos de IP.</p>',
+        '⚡ Scraping vía <strong style="color:#D4FF00">ScraperAPI</strong> '
+        '— IPs residenciales rotadas, sin bloqueos.</p>',
         unsafe_allow_html=True,
     )
 
     if st.button("Buscar eventos", key="btn_buscar"):
-        if not sources_to_scrape:
+        if not sources:
             st.warning("Selecciona al menos una fuente o ingresa una URL")
             return
 
         all_events: list[dict] = []
+        ok_msgs: list[str] = []
+        fail_msgs: list[str] = []
+        seen_names: set[str] = set()
+        n = len(sources)
+
         prog = st.progress(0, text="Iniciando...")
-        n = len(sources_to_scrape)
-
-        ok_labels: list[str] = []
-        failed_labels: list[str] = []
-
-        for i, src in enumerate(sources_to_scrape):
-            prog.progress(int((i / n) * 90) + 5, text="Scrapeando " + src["label"] + "...")
-            html = _fetch_via_gas(src["url"])
-            if html:
-                rows = _parse_html(html, src["url"], src["label"])
-                seen = {e["Evento"].lower() for e in all_events}
-                new  = [r for r in rows if r["Evento"].lower() not in seen]
-                all_events.extend(new)
-                if new:
-                    ok_labels.append(src["label"] + " (" + str(len(new)) + ")")
-                else:
-                    failed_labels.append(src["label"] + " (sin eventos reconocibles)")
+        for i, src in enumerate(sources):
+            prog.progress(int((i / n) * 95) + 2, text="Scrapeando " + src["label"] + "...")
+            html = _fetch(src["url"])
+            if not html:
+                fail_msgs.append(src["label"])
+                continue
+            rows = _parse_html(html, src["url"], src["label"])
+            new  = [r for r in rows if r["Evento"].lower() not in seen_names]
+            for r in new:
+                seen_names.add(r["Evento"].lower())
+            all_events.extend(new)
+            if new:
+                ok_msgs.append(src["label"] + " — " + str(len(new)) + " eventos")
             else:
-                failed_labels.append(src["label"] + " (no accesible)")
+                fail_msgs.append(src["label"] + " (HTML descargado pero sin eventos reconocibles)")
 
         prog.progress(100, text="Listo")
         time.sleep(0.3)
         prog.empty()
 
-        for msg in ok_labels:
-            st.success("✅ " + msg)
-        for msg in failed_labels:
-            st.warning("⚠️ " + msg)
+        for m in ok_msgs:   st.success("✅ " + m)
+        for m in fail_msgs: st.warning("⚠️ " + m)
 
         if all_events:
             st.session_state["discovered"] = all_events
         else:
             st.error(
                 "**0 eventos encontrados.**\n\n"
-                "Posibles causas:\n"
-                "- El GAS script necesita ser actualizado (ver instrucciones abajo)\n"
-                "- Los sitios cambiaron su estructura HTML\n\n"
-                "Verifica que el GAS script esté desplegado con acceso: **Cualquier persona**."
+                "El HTML se descargó correctamente pero los sitios pueden haber "
+                "cambiado su estructura. Prueba con **URL personalizada** pegando "
+                "la URL exacta que ves en tu navegador."
             )
 
-    # ── Results table ─────────────────────────────────────────
+    # ── Results table ──────────────────────────────────────────
     if "discovered" in st.session_state and st.session_state["discovered"]:
         discovered = st.session_state["discovered"]
         st.markdown("<br>", unsafe_allow_html=True)
@@ -690,10 +668,9 @@ def tab_descubrir():
             unsafe_allow_html=True,
         )
         display_cols = ["Evento","Tipo","Fecha","Ciudad","Email","Telefono","Instagram","Web","Fuente"]
-        df_show = pd.DataFrame(discovered)[display_cols].copy()
-
         edited = st.data_editor(
-            df_show, use_container_width=True, num_rows="dynamic",
+            pd.DataFrame(discovered)[display_cols].copy(),
+            use_container_width=True, num_rows="dynamic",
             key="editor_discovered",
             column_config={
                 "Tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS),
