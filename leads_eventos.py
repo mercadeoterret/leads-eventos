@@ -237,238 +237,30 @@ st.markdown(
 )
 
 # ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────
-SHEET_NAME  = "Terret — Leads Eventos"
-WORKSHEET   = "Leads"
-COLUMNS     = ["ID","Evento","Tipo","Fecha","Ciudad","Organizador",
-               "Email","Telefono","Instagram","Web","Fuente","Estado",
-               "Notas","Fecha_Agregado"]
-ESTADOS     = ["Nuevo","Contactado","En negociación","Cerrado","Descartado"]
-TIPOS       = ["Running","Ciclismo","Trail","Triatlón","Duatlón","MTB","Otro"]
+SHEET_NAME = "Terret — Leads Eventos"
+WORKSHEET  = "Leads"
+COLUMNS    = ["ID","Evento","Tipo","Fecha","Ciudad","Organizador",
+              "Email","Telefono","Instagram","Web","Fuente","Estado",
+              "Notas","Fecha_Agregado"]
+ESTADOS    = ["Nuevo","Contactado","En negociación","Cerrado","Descartado"]
+TIPOS      = ["Running","Ciclismo","Trail","Triatlón","Duatlón","MTB","Otro"]
 
-ATLETRACK_URLS = [
-    "https://www.atletrack.com/eventos",
-    "https://www.atletrack.com/eventos/list/",
-    "https://www.atletrack.com/calendario",
-]
-SPORTADICTOS_URLS = [
-    "https://sportadictos.com/categoria/carreras-populares/",
-    "https://sportadictos.com/category/carreras/",
-    "https://sportadictos.com/carreras/",
-]
-EXTRA_SOURCES = [
-    ("https://correr.co/carreras/",            "Correr.co"),
-    ("https://www.carrerasenruta.com/eventos/", "CarrerasEnRuta"),
-    ("https://runningcolombia.co/eventos/",     "RunningColombia"),
-    ("https://triatlon.com.co/eventos/",        "Triatlon.com.co"),
+DEFAULT_SOURCES = [
+    {"label": "Atletrack — Eventos",       "url": "https://www.atletrack.com/eventos"},
+    {"label": "Sportadictos — Carreras",   "url": "https://sportadictos.com/categoria/carreras-populares/"},
+    {"label": "Correr.co — Carreras",      "url": "https://correr.co/carreras/"},
+    {"label": "TravesiaDeportiva",         "url": "https://travesiadeportiva.com/"},
+    {"label": "RunningColombia",           "url": "https://runningcolombia.co/eventos/"},
+    {"label": "Triatlon.com.co",           "url": "https://triatlon.com.co/eventos/"},
 ]
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "es-CO,es;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Cache-Control": "max-age=0",
-}
-
 # ─────────────────────────────────────────────
-# AUTH
+# HELPERS
 # ─────────────────────────────────────────────
-def check_password():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-
-    if st.session_state.authenticated:
-        return True
-
-    col1, col2, col3 = st.columns([1, 1.4, 1])
-    with col2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown('<div class="terret-header" style="text-align:center">TERRET</div>', unsafe_allow_html=True)
-        st.markdown('<div class="terret-sub" style="text-align:center;margin-bottom:2rem">Lead Mining · Eventos Deportivos</div>', unsafe_allow_html=True)
-
-        pwd = st.text_input("Contraseña", type="password", key="login_pwd",
-                            placeholder="••••••••")
-        if st.button("Entrar", key="login_btn"):
-            if pwd == st.secrets.get("APP_PASSWORD", "terret2024"):
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Contraseña incorrecta")
-    return False
-
-# ─────────────────────────────────────────────
-# GOOGLE SHEETS
-# ─────────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def get_gspread_client():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds_dict = dict(st.secrets["gcp_service_account"])
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    return gspread.authorize(creds)
-
-
-def get_or_create_sheet():
-    gc = get_gspread_client()
-    try:
-        sh = gc.open(SHEET_NAME)
-    except gspread.SpreadsheetNotFound:
-        sh = gc.create(SHEET_NAME)
-        sh.share(
-            st.secrets["gcp_service_account"]["client_email"],
-            perm_type="user",
-            role="writer",
-        )
-    try:
-        ws = sh.worksheet(WORKSHEET)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=WORKSHEET, rows=1000, cols=len(COLUMNS))
-        ws.append_row(COLUMNS)
-        _fmt_header(ws)
-    return ws
-
-
-def _fmt_header(ws):
-    """Bold header row."""
-    try:
-        ws.format("A1:N1", {
-            "textFormat": {"bold": True, "fontSize": 10},
-            "backgroundColor": {"red": 0.06, "green": 0.06, "blue": 0.12},
-        })
-    except Exception:
-        pass
-
-
-def load_leads() -> pd.DataFrame:
-    try:
-        ws = get_or_create_sheet()
-        data = ws.get_all_records()
-        if not data:
-            return pd.DataFrame(columns=COLUMNS)
-        df = pd.DataFrame(data)
-        for col in COLUMNS:
-            if col not in df.columns:
-                df[col] = ""
-        return df[COLUMNS]
-    except Exception as e:
-        st.error("Error cargando Sheets: " + str(e))
-        return pd.DataFrame(columns=COLUMNS)
-
-
-def save_leads(rows: list[dict]):
-    """Append new rows to the sheet."""
-    ws = get_or_create_sheet()
-    existing = ws.get_all_records()
-    existing_events = {r.get("Evento", "").lower().strip() for r in existing}
-    added = 0
-    for row in rows:
-        if row.get("Evento", "").lower().strip() in existing_events:
-            continue
-        row_vals = [row.get(c, "") for c in COLUMNS]
-        ws.append_row(row_vals, value_input_option="USER_ENTERED")
-        existing_events.add(row.get("Evento", "").lower().strip())
-        added += 1
-    return added
-
-
-def update_lead_field(row_idx: int, field: str, value: str):
-    """Update a single cell. row_idx is 0-based DataFrame index."""
-    ws = get_or_create_sheet()
-    col_idx = COLUMNS.index(field) + 1
-    ws_row   = row_idx + 2          # +1 header +1 1-based
-    ws.update_cell(ws_row, col_idx, value)
-
-# ─────────────────────────────────────────────
-# SCRAPING UTILITIES
-# ─────────────────────────────────────────────
-EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
-PHONE_RE = re.compile(r"(?:\+?57[\s-]?)?(?:3\d{2}[\s-]?\d{3}[\s-]?\d{4}|(?:\(?\d{1,3}\)?[\s-]?)?\d{6,8})")
-INSTA_RE = re.compile(r"instagram\.com/([A-Za-z0-9_.]+)")
-DATE_RE  = re.compile(
-    r"(\d{1,2}[\s/\-\.]\w+[\s/\-\.]\d{2,4}|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\w+ \d{1,2},? \d{4})"
-)
-
-CITIES_CO = [
-    "bogotá","bogota","medellín","medellin","cali","barranquilla","cartagena",
-    "bucaramanga","pereira","manizales","armenia","santa marta","ibagué","ibague",
-    "villavicencio","cúcuta","cucuta","pasto","montería","monteria","sincelejo",
-    "valledupar","neiva","popayán","popayan","tunja","rionegro","envigado",
-    "bello","itagüí","itagui","girardot","fusagasugá","fusagasuga","zipaquirá","zipaquira",
-    "eje cafetero","antioquia","cundinamarca","tolima","santander","boyacá","boyaca",
-]
-
-# Sources with RSS feeds (WordPress /feed/ always works, never blocked)
-RSS_SOURCES = [
-    ("https://sportadictos.com/feed/",                          "Sportadictos"),
-    ("https://correr.co/feed/",                                 "Correr.co"),
-    ("https://runningcolombia.co/feed/",                        "RunningColombia"),
-    ("https://www.ciclismoafondo.es/feed/",                     "CiclismoAfondo"),
-    ("https://triatlon.org/feed/",                              "Triatlon.org"),
-    ("https://sportadictos.com/categoria/carreras-populares/feed/", "Sportadictos-Carreras"),
-    ("https://correr.co/carreras/feed/",                        "Correr.co-Carreras"),
-]
-
-# AllOrigins proxy — bypasses IP blocks from Streamlit Cloud
-ALLORIGINS = "https://api.allorigins.win/get?url={}"
-
-DIRECT_URLS = [
-    ("https://www.atletrack.com/eventos",                       "Atletrack"),
-    ("https://www.atletrack.com/eventos/list/",                 "Atletrack"),
-    ("https://sportadictos.com/categoria/carreras-populares/",  "Sportadictos"),
-    ("https://correr.co/carreras/",                             "Correr.co"),
-    ("https://travesiadeportiva.com/eventos/",                  "TravesiaDeportiva"),
-    ("https://travesiadeportiva.com/",                          "TravesiaDeportiva"),
-    ("https://www.carrerasenruta.com/eventos/",                 "CarrerasEnRuta"),
-]
-
-HEADERS_SCRAPE = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-    "Accept-Language": "es-CO,es;q=0.9,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-}
-
-
-def _extract_contact_info(text: str) -> dict:
-    emails = EMAIL_RE.findall(text)
-    phones = PHONE_RE.findall(text)
-    instas = INSTA_RE.findall(text)
-    bad = {"example","sentry","wix","wordpress","schema","google","w3","jquery",
-           "domain","email","support","info","noreply","test"}
-    emails = [e for e in emails if e.split("@")[-1].split(".")[0].lower() not in bad]
-    return {
-        "Email":     emails[0] if emails else "",
-        "Telefono":  phones[0] if phones else "",
-        "Instagram": "@" + instas[0] if instas else "",
-    }
-
-
-def _guess_tipo(text: str) -> str:
-    t = text.lower()
-    if any(k in t for k in ["cicl","bicicleta","bike","gran fondo","ciclovía"]): return "Ciclismo"
-    if "mtb" in t: return "MTB"
-    if "trail" in t: return "Trail"
-    if "triat" in t: return "Triatlón"
-    if "duat"  in t: return "Duatlón"
-    return "Running"
-
-
-def _extract_city(text: str) -> str:
-    tl = text.lower()
-    return next((c.title() for c in CITIES_CO if c in tl), "Colombia")
-
-
 def _new_row(evento="", tipo="", fecha="", ciudad="", organizador="",
              email="", telefono="", instagram="", web="", fuente="",
              notas="") -> dict:
@@ -490,237 +282,487 @@ def _new_row(evento="", tipo="", fecha="", ciudad="", organizador="",
     }
 
 
-# ── Method 1: RSS feed (most reliable — WordPress /feed/ is never blocked) ──
-def _scrape_rss(feed_url: str, source_name: str) -> list[dict]:
-    """Parse an RSS/Atom feed. Returns list of event rows."""
-    if not HAS_FEEDPARSER:
-        return []
-    try:
-        # feedparser handles redirects and encoding automatically
-        feed = feedparser.parse(feed_url)
-        if not feed.entries:
-            # Try via allorigins proxy
-            proxied = ALLORIGINS.format(quote_plus(feed_url))
-            r = requests.get(proxied, timeout=12)
-            if r.status_code == 200:
-                data = r.json()
-                feed = feedparser.parse(data.get("contents",""))
-        results = []
-        seen = set()
-        for entry in feed.entries[:40]:
-            name = entry.get("title","").strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            link    = entry.get("link","")
-            summary = BeautifulSoup(
-                entry.get("summary","") + entry.get("content",[{"value":""}])[0].get("value",""),
-                "html.parser"
-            ).get_text(" ", strip=True)
-            pub     = entry.get("published","") or entry.get("updated","")
-            # Try to extract date from published field
-            fecha = pub[:10] if pub else ""
-            if not fecha:
-                m = DATE_RE.search(summary)
-                fecha = m.group(0) if m else ""
-            contact = _extract_contact_info(summary)
-            ciudad  = _extract_city(name + " " + summary)
-            results.append(_new_row(
-                evento=name,
-                tipo=_guess_tipo(name + " " + summary),
-                fecha=fecha,
-                ciudad=ciudad,
-                web=link,
-                fuente=source_name,
-                **contact,
-            ))
-        return results
-    except Exception:
-        return []
-
-
-# ── Method 2: Direct HTTP (works when site doesn't block cloud IPs) ──
-def _scrape_direct(url: str, source_name: str) -> list[dict]:
-    """Direct HTTP GET with multiple UA fallbacks."""
-    uas = [
-        HEADERS_SCRAPE["User-Agent"],
-        "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
-        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "curl/8.4.0",
-    ]
-    soup = None
-    for ua in uas:
-        try:
-            r = requests.get(url, headers={**HEADERS_SCRAPE, "User-Agent": ua},
-                             timeout=14, allow_redirects=True)
-            if r.status_code == 200 and len(r.text) > 800:
-                soup = BeautifulSoup(r.text, "html.parser")
-                break
-        except Exception:
-            continue
-    if not soup:
-        return []
-    return _parse_html(soup, url, source_name)
-
-
-# ── Method 3: AllOrigins proxy (bypasses IP blocks) ──
-def _scrape_via_proxy(url: str, source_name: str) -> list[dict]:
-    """Fetch through allorigins.win free proxy."""
-    try:
-        proxied = ALLORIGINS.format(quote_plus(url))
-        r = requests.get(proxied, timeout=20)
-        if r.status_code != 200:
-            return []
-        data = r.json()
-        html = data.get("contents","")
-        if len(html) < 500:
-            return []
-        soup = BeautifulSoup(html, "html.parser")
-        return _parse_html(soup, url, source_name)
-    except Exception:
-        return []
-
-
-# ── HTML parser (shared by direct + proxy) ──
-def _parse_html(soup: BeautifulSoup, base_url: str, fuente: str) -> list[dict]:
-    results = []
-    seen    = set()
-
-    def _add(name, href, text, fecha=""):
-        nonlocal results
-        if not name or name in seen or len(name) < 5:
-            return
-        seen.add(name)
-        if not fecha:
-            m = DATE_RE.search(text)
-            fecha = m.group(0) if m else ""
-        contact = _extract_contact_info(text)
-        ciudad  = _extract_city(name + " " + text)
-        web     = href if href.startswith("http") else urljoin(base_url, href)
-        results.append(_new_row(
-            evento=name, tipo=_guess_tipo(name+" "+text),
-            fecha=fecha, ciudad=ciudad, web=web, fuente=fuente,
-            **contact,
+def _rows_from_js(js_events: list[dict]) -> list[dict]:
+    """Convert raw JS-scraped dicts into full CRM rows."""
+    rows = []
+    for e in js_events:
+        rows.append(_new_row(
+            evento    = e.get("nombre","")[:200],
+            tipo      = e.get("tipo","Running"),
+            fecha     = e.get("fecha",""),
+            ciudad    = e.get("ciudad","Colombia"),
+            organizador=e.get("organizador",""),
+            email     = e.get("email",""),
+            telefono  = e.get("telefono",""),
+            instagram = e.get("instagram",""),
+            web       = e.get("web",""),
+            fuente    = e.get("fuente",""),
+            notas     = e.get("notas",""),
         ))
-
-    # Tribe Events Calendar
-    for art in soup.find_all("article", class_=re.compile(r"tribe_event|type-tribe", re.I))[:50]:
-        a      = art.find("a", class_=re.compile(r"tribe-event-url", re.I)) or art.find("h2")
-        name   = a.get_text(strip=True) if a else ""
-        href   = a.get("href","") if hasattr(a,"get") else ""
-        dt_tag = art.find("abbr") or art.find("time")
-        fecha  = (dt_tag.get("title","") or dt_tag.get("datetime","") or dt_tag.get_text(strip=True)) if dt_tag else ""
-        _add(name, href, art.get_text(" ", strip=True), fecha)
-    if results: return results
-
-    # WordPress articles
-    for art in soup.find_all("article")[:50]:
-        h     = art.find(["h2","h3","h4"])
-        name  = h.get_text(strip=True) if h else ""
-        a     = (h.find("a") if h else None) or art.find("a", href=True)
-        href  = a.get("href","") if a else ""
-        t_tag = art.find("time")
-        fecha = (t_tag.get("datetime","") or t_tag.get_text(strip=True)) if t_tag else ""
-        _add(name, href, art.get_text(" ", strip=True), fecha)
-    if results: return results
-
-    # Generic cards/items
-    for tag in ["div","li","section"]:
-        for c in soup.find_all(tag, class_=re.compile(r"event|card|item|race|carrera|run", re.I))[:50]:
-            links = c.find_all("a", href=True)
-            name  = links[0].get_text(strip=True) if links else c.get_text(strip=True)[:80]
-            href  = links[0]["href"] if links else ""
-            _add(name, href, c.get_text(" ", strip=True))
-        if results: return results
-
-    # Event-keyword links fallback
-    for a in soup.find_all("a", href=True):
-        name = a.get_text(strip=True)
-        if (3 <= len(name.split()) <= 12
-                and any(k in name.lower() for k in
-                        ["run","trail","cicl","triat","carrera","maratón","maratón",
-                         "km","ciclismo","duatl","mtb","cross","fondo","travesía"])):
-            _add(name, a["href"], name)
-    return results
+    return rows
 
 
-# ── Orchestrators ──
-def scrape_rss_all() -> tuple[list[dict], list[str]]:
-    """Try all RSS feeds. Returns (events, working_sources)."""
-    all_events  : list[dict] = []
-    working     : list[str]  = []
-    for feed_url, name in RSS_SOURCES:
-        rows = _scrape_rss(feed_url, name)
-        if rows:
-            all_events.extend(rows)
-            working.append(name)
-    return all_events, working
+# ─────────────────────────────────────────────
+# BROWSER-SIDE JS SCRAPER COMPONENT
+# This runs fetch() in the USER's browser (real IP),
+# bypassing any server-side IP blocks on Streamlit Cloud.
+# allorigins.win proxy works from real IPs, not from AWS.
+# ─────────────────────────────────────────────
+def _build_scraper_html(urls: list[str], source_labels: list[str]) -> str:
+    urls_js    = json.dumps(urls)
+    labels_js  = json.dumps(source_labels)
+
+    return """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #07070F;
+    font-family: 'DM Mono', 'Courier New', monospace;
+    font-size: 12px;
+    color: #E8E8F0;
+    padding: 12px;
+    min-height: 60px;
+  }
+  #status {
+    color: #6B6B8A;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+    min-height: 16px;
+  }
+  .bar-wrap {
+    background: #1C1C2E;
+    border-radius: 3px;
+    height: 4px;
+    width: 100%;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  #bar {
+    background: #D4FF00;
+    height: 4px;
+    width: 0%;
+    transition: width 0.3s ease;
+    border-radius: 3px;
+  }
+  #result-box {
+    display: none;
+    background: #0F0F1A;
+    border: 1px solid #1C1C2E;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: #D4FF00;
+    letter-spacing: 0.06em;
+  }
+  .err { color: #EF4444 !important; }
+</style>
+</head>
+<body>
+<div id="status">Iniciando scraping desde tu navegador...</div>
+<div class="bar-wrap"><div id="bar"></div></div>
+<div id="result-box"></div>
+
+<script>
+const URLS   = """ + urls_js + """;
+const LABELS = """ + labels_js + """;
+const PROXY  = 'https://api.allorigins.win/get?url=';
+
+const CITIES = ['bogotá','bogota','medellín','medellin','cali','barranquilla',
+  'cartagena','bucaramanga','pereira','manizales','armenia','santa marta',
+  'ibagué','ibague','villavicencio','cúcuta','cucuta','pasto','montería',
+  'monteria','sincelejo','valledupar','neiva','popayán','popayan','tunja',
+  'rionegro','envigado','bello','itagüí','itagui','girardot','medellín'];
+
+function guessCity(text) {
+  const t = text.toLowerCase();
+  for (const c of CITIES) { if (t.includes(c)) return c.charAt(0).toUpperCase() + c.slice(1); }
+  return 'Colombia';
+}
+function guessTipo(text) {
+  const t = text.toLowerCase();
+  if (/cicl|bicicleta|bike|gran fondo/.test(t)) return 'Ciclismo';
+  if (/\\bmtb\\b/.test(t)) return 'MTB';
+  if (/trail/.test(t)) return 'Trail';
+  if (/triat/.test(t)) return 'Triatlón';
+  if (/duat/.test(t))  return 'Duatlón';
+  return 'Running';
+}
+function extractEmail(text) {
+  const m = text.match(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+/);
+  if (!m) return '';
+  const bad = ['example','wordpress','schema','google','w3','jquery','sentry','wix'];
+  const domain = m[0].split('@')[1].split('.')[0].toLowerCase();
+  return bad.includes(domain) ? '' : m[0];
+}
+function extractPhone(text) {
+  const m = text.match(/(?:\\+?57[\\s-]?)?3\\d{2}[\\s-]?\\d{3}[\\s-]?\\d{4}/);
+  return m ? m[0] : '';
+}
+function extractInsta(text) {
+  const m = text.match(/instagram\\.com\\/([A-Za-z0-9_.]+)/);
+  return m ? '@' + m[1] : '';
+}
+function extractDate(text) {
+  const m = text.match(/\\d{1,2}[\\s\\/\\-\\.]\\w+[\\s\\/\\-\\.]\\d{2,4}|\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{2,4}/);
+  return m ? m[0] : '';
+}
+
+function parseHTML(html, baseUrl, fuente) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const events = [];
+  const seen = new Set();
+
+  function addEvent(name, href, textContent, fecha) {
+    name = (name || '').trim().replace(/\\s+/g,' ').substring(0,180);
+    if (!name || name.length < 5 || seen.has(name.toLowerCase())) return;
+    seen.add(name.toLowerCase());
+    const fullUrl = href
+      ? (href.startsWith('http') ? href : new URL(href, baseUrl).href)
+      : baseUrl;
+    const fecha2 = fecha || extractDate(textContent);
+    events.push({
+      nombre:     name,
+      tipo:       guessTipo(name + ' ' + textContent),
+      fecha:      fecha2,
+      ciudad:     guessCity(name + ' ' + textContent),
+      email:      extractEmail(textContent),
+      telefono:   extractPhone(textContent),
+      instagram:  extractInsta(textContent),
+      web:        fullUrl,
+      fuente:     fuente,
+    });
+  }
+
+  // Strategy 1: Tribe Events Calendar
+  const tribe = doc.querySelectorAll('article[class*="tribe_event"], article[class*="type-tribe"]');
+  if (tribe.length > 0) {
+    tribe.forEach(art => {
+      const a = art.querySelector('a[class*="tribe-event-url"]') || art.querySelector('h2 a') || art.querySelector('h3 a');
+      const name = a ? a.textContent.trim() : '';
+      const href = a ? a.getAttribute('href') : '';
+      const abbr = art.querySelector('abbr[title]');
+      const timeEl = art.querySelector('time');
+      const fecha  = abbr ? abbr.getAttribute('title') : (timeEl ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim()) : '');
+      addEvent(name, href, art.textContent, fecha);
+    });
+    if (events.length > 0) return events;
+  }
+
+  // Strategy 2: WordPress articles
+  const arts = doc.querySelectorAll('article');
+  if (arts.length > 0) {
+    arts.forEach(art => {
+      const h = art.querySelector('h1,h2,h3,h4');
+      const a = h ? (h.querySelector('a') || art.querySelector('a[href]')) : art.querySelector('a[href]');
+      const name = h ? h.textContent.trim() : '';
+      const href = a ? a.getAttribute('href') : '';
+      const t = art.querySelector('time');
+      const fecha = t ? (t.getAttribute('datetime') || t.textContent.trim()) : '';
+      addEvent(name, href, art.textContent, fecha);
+    });
+    if (events.length > 0) return events;
+  }
+
+  // Strategy 3: cards/items
+  const cards = doc.querySelectorAll('[class*="event"],[class*="card"],[class*="item"],[class*="race"],[class*="carrera"]');
+  cards.forEach(c => {
+    const links = c.querySelectorAll('a[href]');
+    const name  = links.length ? links[0].textContent.trim() : c.textContent.trim().substring(0,80);
+    const href  = links.length ? links[0].getAttribute('href') : '';
+    addEvent(name, href, c.textContent, '');
+  });
+  if (events.length > 0) return events;
+
+  // Strategy 4: keyword links
+  doc.querySelectorAll('a[href]').forEach(a => {
+    const name = a.textContent.trim();
+    if (name.split(' ').length >= 3 && name.length < 120 &&
+        /run|trail|cicl|triat|carrera|maratón|maratón|ciclismo|duatl|mtb|travesía|fondo/i.test(name)) {
+      addEvent(name, a.getAttribute('href'), name, '');
+    }
+  });
+
+  return events;
+}
+
+async function fetchViaProxy(url) {
+  const proxyUrl = PROXY + encodeURIComponent(url);
+  const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+  if (!resp.ok) throw new Error('proxy ' + resp.status);
+  const data = await resp.json();
+  if (!data.contents || data.contents.length < 500) throw new Error('empty response');
+  return data.contents;
+}
+
+async function scrapeOne(url, label, index, total) {
+  setStatus('Scrapeando ' + label + ' (' + (index+1) + '/' + total + ')...');
+  setBar(Math.round((index / total) * 90));
+
+  let html = null;
+
+  // Try 1: direct fetch
+  try {
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(12000),
+      headers: { 'Accept': 'text/html,*/*' }
+    });
+    if (resp.ok) { html = await resp.text(); }
+  } catch(e) {}
+
+  // Try 2: via allorigins proxy (works from real browser IPs)
+  if (!html || html.length < 500) {
+    try { html = await fetchViaProxy(url); } catch(e) {}
+  }
+
+  // Try 3: RSS feed variant
+  if (!html || html.length < 500) {
+    const rssUrl = url.replace(/\\/?$/, '') + '/feed/';
+    try { html = await fetchViaProxy(rssUrl); } catch(e) {}
+  }
+
+  if (!html || html.length < 300) {
+    return { source: label, events: [], error: 'No se pudo acceder al sitio' };
+  }
+
+  const events = parseHTML(html, url, label);
+  return { source: label, events, error: null };
+}
+
+async function runAll() {
+  const allEvents = [];
+  const errors = [];
+
+  for (let i = 0; i < URLS.length; i++) {
+    try {
+      const result = await scrapeOne(URLS[i], LABELS[i], i, URLS.length);
+      if (result.events.length > 0) {
+        allEvents.push(...result.events);
+      } else if (result.error) {
+        errors.push(LABELS[i] + ': ' + result.error);
+      }
+    } catch(e) {
+      errors.push(LABELS[i] + ': ' + e.message);
+    }
+    // Small delay to avoid rate limiting
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  // Deduplicate by name
+  const seen = new Set();
+  const unique = allEvents.filter(e => {
+    const k = e.nombre.toLowerCase().trim();
+    if (!k || seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+
+  setBar(100);
+  setStatus('Listo — ' + unique.length + ' eventos encontrados');
+  showResult(unique.length + ' eventos de ' + URLS.length + ' fuentes');
+
+  // Send to Streamlit
+  window.parent.postMessage({
+    type: 'streamlit:setComponentValue',
+    value: { events: unique, errors: errors, done: true }
+  }, '*');
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+function setBar(pct) {
+  document.getElementById('bar').style.width = pct + '%';
+}
+function showResult(msg) {
+  const box = document.getElementById('result-box');
+  box.style.display = 'block';
+  box.textContent = '✓ ' + msg;
+}
+
+runAll();
+</script>
+</body>
+</html>"""
 
 
-def scrape_direct_all() -> tuple[list[dict], list[str], list[str]]:
-    """Try all direct URLs. Returns (events, working_sources, failed_sources)."""
-    all_events : list[dict] = []
-    working    : list[str]  = []
-    failed     : list[str]  = []
-    for url, name in DIRECT_URLS:
-        rows = _scrape_direct(url, name)
-        if rows:
-            all_events.extend(rows)
-            if name not in working:
-                working.append(name)
-        else:
-            # Try proxy fallback
-            rows = _scrape_via_proxy(url, name)
-            if rows:
-                all_events.extend(rows)
-                if name not in working:
-                    working.append(name + " (proxy)")
-            else:
-                if name not in failed:
-                    failed.append(name)
-    return all_events, working, failed
+# ─────────────────────────────────────────────
+# TAB 1 — DESCUBRIR
+# ─────────────────────────────────────────────
+def tab_descubrir():
+    st.markdown(
+        '<p class="terret-sub" style="font-size:0.8rem;letter-spacing:0.14em">MODO DE BÚSQUEDA</p>',
+        unsafe_allow_html=True,
+    )
 
+    modo = st.radio(
+        "Modo",
+        ["🤖 Automático", "🔗 URL personalizada"],
+        key="modo_busqueda",
+        label_visibility="collapsed",
+        horizontal=True,
+    )
 
-def scrape_url(url: str) -> list[dict]:
-    """Scrape a single URL: try direct first, then proxy."""
-    rows = _scrape_direct(url, url)
-    if rows:
-        return rows
-    return _scrape_via_proxy(url, url)
+    # ── Source selector ──
+    if modo == "🤖 Automático":
+        st.markdown('<p class="mono-sm" style="margin-bottom:6px">Fuentes a scrapear:</p>', unsafe_allow_html=True)
+        selected_sources = []
+        cols = st.columns(3)
+        for i, src in enumerate(DEFAULT_SOURCES):
+            with cols[i % 3]:
+                uid = uuid.uuid4().hex[:4]
+                if st.checkbox(src["label"], value=True, key="src_" + str(i) + "_" + uid):
+                    selected_sources.append(src)
+        urls_to_scrape  = [s["url"]   for s in selected_sources]
+        labels_to_scrape = [s["label"] for s in selected_sources]
+    else:
+        custom = st.text_input(
+            "URL del directorio",
+            placeholder="https://www.atletrack.com/eventos",
+            key="custom_url_input",
+        )
+        urls_to_scrape   = [custom.strip()] if custom.strip() else []
+        labels_to_scrape = [custom.strip()] if custom.strip() else []
 
+    st.markdown(
+        '<p class="mono-sm" style="color:#6B6B8A;margin-top:4px">'
+        '⚡ El scraping corre en <strong style="color:#D4FF00">tu navegador</strong> '
+        '(no en el servidor) — evita bloqueos de IP.</p>',
+        unsafe_allow_html=True,
+    )
 
-def enrich_with_google(events: list[dict]) -> list[dict]:
-    try:
-        from googlesearch import search as gsearch
-    except ImportError:
-        return events
-    enriched = []
-    for ev in events:
-        if ev.get("Email") and ev.get("Telefono"):
-            enriched.append(ev)
-            continue
-        query = '"' + ev["Evento"] + ' Colombia" contacto organizador email'
-        try:
-            urls = list(gsearch(query, num_results=3, lang="es", sleep_interval=1))
-        except Exception:
-            enriched.append(ev)
-            continue
-        for u in urls[:2]:
-            rows = _scrape_direct(u, "")
-            soup_txt = ""
+    if st.button("Buscar eventos", key="btn_buscar"):
+        if not urls_to_scrape:
+            st.warning("Selecciona al menos una fuente o ingresa una URL")
+            return
+        st.session_state["scraping_active"] = True
+        st.session_state["scraping_urls"]   = urls_to_scrape
+        st.session_state["scraping_labels"] = labels_to_scrape
+        st.session_state.pop("discovered", None)
+        st.session_state.pop("js_result", None)
+        st.rerun()
+
+    # ── JS Component ──
+    if st.session_state.get("scraping_active"):
+        urls   = st.session_state.get("scraping_urls", [])
+        labels = st.session_state.get("scraping_labels", [])
+
+        html_code = _build_scraper_html(urls, labels)
+        result = st.components.v1.html(html_code, height=90, scrolling=False)
+
+        # Streamlit components return value via session state trick:
+        # We show a "paste results" JSON area as reliable fallback
+        st.markdown(
+            '<p class="mono-sm" style="margin-top:12px;color:#6B6B8A">'
+            'Cuando el scraping termine, los resultados aparecerán automáticamente abajo. '
+            'Si no aparecen en 30 segundos, usa el botón de abajo.</p>',
+            unsafe_allow_html=True,
+        )
+
+        # Polling mechanism: embed a hidden iframe that posts back
+        # Use query_params to receive data back
+        if "js_result" in st.session_state and st.session_state["js_result"]:
+            raw = st.session_state["js_result"]
             try:
-                r = requests.get(u, headers=HEADERS_SCRAPE, timeout=8)
-                soup_txt = BeautifulSoup(r.text,"html.parser").get_text(" ",strip=True)[:3000]
+                data = json.loads(raw) if isinstance(raw, str) else raw
+                events = data.get("events", [])
+                if events:
+                    rows = _rows_from_js(events)
+                    st.session_state["discovered"] = rows
+                    st.session_state["scraping_active"] = False
+                    st.session_state.pop("js_result", None)
+                    st.rerun()
             except Exception:
                 pass
-            c = _extract_contact_info(soup_txt)
-            if c["Email"]     and not ev["Email"]:     ev["Email"]     = c["Email"]
-            if c["Telefono"]  and not ev["Telefono"]:  ev["Telefono"]  = c["Telefono"]
-            if c["Instagram"] and not ev["Instagram"]: ev["Instagram"] = c["Instagram"]
-            if ev["Email"] and ev["Telefono"]:
-                break
-        enriched.append(ev)
-    return enriched
+
+        # Manual paste fallback
+        with st.expander("¿No aparecen resultados? Pega el JSON aquí", expanded=False):
+            st.markdown(
+                '<p class="mono-sm">Abre la consola del navegador (F12 → Console), '
+                'copia el JSON que muestra y pégalo aquí.</p>',
+                unsafe_allow_html=True,
+            )
+            json_paste = st.text_area("JSON de resultados", height=120, key="json_paste_area",
+                                       placeholder='{"events": [...], "errors": []}')
+            if st.button("Procesar JSON", key="btn_process_json"):
+                try:
+                    data   = json.loads(json_paste)
+                    events = data.get("events", [])
+                    if events:
+                        rows = _rows_from_js(events)
+                        st.session_state["discovered"] = rows
+                        st.session_state["scraping_active"] = False
+                        st.success(f"✅ {len(rows)} eventos cargados")
+                        st.rerun()
+                    else:
+                        st.error("No se encontraron eventos en el JSON")
+                except json.JSONDecodeError as e:
+                    st.error("JSON inválido: " + str(e))
+
+        if st.button("Cancelar búsqueda", key="btn_cancel"):
+            st.session_state["scraping_active"] = False
+            st.rerun()
+
+    # ── Results table ──
+    if "discovered" in st.session_state and st.session_state["discovered"]:
+        discovered = st.session_state["discovered"]
+        st.markdown("<br>", unsafe_allow_html=True)
+        badge_text = str(len(discovered)) + " EVENTOS — EDITA Y SELECCIONA PARA GUARDAR"
+        st.markdown(
+            '<p class="terret-sub" style="font-size:0.8rem;letter-spacing:0.14em">' + badge_text + '</p>',
+            unsafe_allow_html=True,
+        )
+
+        display_cols = ["Evento","Tipo","Fecha","Ciudad","Email","Telefono","Instagram","Web","Fuente"]
+        df_show = pd.DataFrame(discovered)[display_cols].copy()
+
+        edited = st.data_editor(
+            df_show,
+            use_container_width=True,
+            num_rows="dynamic",
+            key="editor_discovered",
+            column_config={
+                "Tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS),
+                "Web":  st.column_config.LinkColumn("Web"),
+            },
+        )
+
+        st.markdown(
+            '<p class="terret-sub" style="font-size:0.75rem;margin-top:8px;letter-spacing:0.1em">'
+            'SELECCIONA FILAS A GUARDAR</p>',
+            unsafe_allow_html=True,
+        )
+        seleccionados = []
+        for i, row in edited.iterrows():
+            uid = uuid.uuid4().hex[:6]
+            label = str(row["Evento"])[:60] if row["Evento"] else "Fila " + str(i+1)
+            if st.checkbox(label, value=True, key="sel_" + str(i) + "_" + uid):
+                seleccionados.append(i)
+
+        col_s1, col_s2 = st.columns([1, 4])
+        with col_s1:
+            if st.button("💾 Guardar seleccionados", key="btn_guardar"):
+                if not seleccionados:
+                    st.warning("No hay filas seleccionadas")
+                else:
+                    rows_to_save = []
+                    for i in seleccionados:
+                        base = discovered[i].copy()
+                        base.update({c: edited.iloc[i][c] for c in display_cols if c in edited.columns})
+                        rows_to_save.append(base)
+                    with st.spinner("Guardando en Google Sheets..."):
+                        added = save_leads(rows_to_save)
+                    st.success("✅ " + str(added) + " leads guardados (duplicados omitidos)")
+                    del st.session_state["discovered"]
+                    st.rerun()
+        with col_s2:
+            if st.button("Limpiar lista", key="btn_limpiar"):
+                del st.session_state["discovered"]
+                st.rerun()
 
 def generate_email_template(lead: dict) -> str:
     nombre  = lead.get("Evento", "tu evento")
@@ -767,235 +809,6 @@ def render_header():
 # ─────────────────────────────────────────────
 # TAB 1 — DESCUBRIR
 # ─────────────────────────────────────────────
-def tab_descubrir():
-    st.markdown('<p class="terret-sub" style="font-size:0.8rem;letter-spacing:0.14em">MODO DE BÚSQUEDA</p>', unsafe_allow_html=True)
-
-    modo = st.radio(
-        "Modo",
-        ["🤖 Automático", "🔗 URL personalizada", "✏️ Entrada manual"],
-        key="modo_busqueda",
-        label_visibility="collapsed",
-        horizontal=True,
-    )
-
-    # ──────────────────────────────────
-    # MODO AUTOMÁTICO
-    # ──────────────────────────────────
-    if modo == "🤖 Automático":
-        st.markdown(
-            '<p class="mono-sm">Intenta RSS feeds primero (más confiable), luego HTTP directo '
-            'y proxy como fallback.</p>',
-            unsafe_allow_html=True,
-        )
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            do_enrich = st.checkbox("Enriquecer con Google Search (lento)", value=False, key="chk_enrich")
-
-        if st.button("Buscar eventos", key="btn_buscar_auto"):
-            all_events: list[dict] = []
-            log_msgs: list[tuple[str,str]] = []  # (level, msg)
-
-            prog = st.progress(0, text="Buscando vía RSS feeds...")
-
-            # Step 1 — RSS (most reliable)
-            rss_events, rss_ok = scrape_rss_all()
-            if rss_events:
-                all_events.extend(rss_events)
-                log_msgs.append(("ok", f"RSS feeds: {len(rss_events)} eventos de {', '.join(rss_ok)}"))
-            else:
-                log_msgs.append(("warn", "RSS feeds: sin resultados"))
-
-            prog.progress(40, text="Intentando scraping directo...")
-
-            # Step 2 — Direct + proxy
-            direct_events, direct_ok, direct_fail = scrape_direct_all()
-            if direct_events:
-                all_events.extend(direct_events)
-                log_msgs.append(("ok", f"Scraping: {len(direct_events)} eventos de {', '.join(direct_ok)}"))
-            if direct_fail:
-                log_msgs.append(("warn", f"Bloqueados (normal en cloud): {', '.join(direct_fail)}"))
-
-            prog.progress(80, text="Deduplicando...")
-
-            # Deduplicate by name
-            seen_names: set[str] = set()
-            unique: list[dict] = []
-            for ev in all_events:
-                k = ev["Evento"].lower().strip()
-                if k and k not in seen_names:
-                    seen_names.add(k)
-                    unique.append(ev)
-            all_events = unique
-
-            if do_enrich and all_events:
-                prog.progress(85, text="Enriqueciendo con Google Search...")
-                all_events = enrich_with_google(all_events)
-
-            prog.progress(100, text="Listo")
-            time.sleep(0.3)
-            prog.empty()
-
-            # Show log
-            for level, msg in log_msgs:
-                if level == "ok":
-                    st.success("✅ " + msg)
-                else:
-                    st.warning("⚠️ " + msg)
-
-            if all_events:
-                st.session_state["discovered"] = all_events
-            else:
-                st.error(
-                    "**0 eventos encontrados.** Los sitios están bloqueando las IPs de Streamlit Cloud. "
-                    "Soluciones:\n\n"
-                    "**1.** Cambia a **🔗 URL personalizada** — abre el sitio en tu navegador, "
-                    "copia la URL y pégala aquí.\n\n"
-                    "**2.** Usa **✏️ Entrada manual** para agregar eventos directamente."
-                )
-
-    # ──────────────────────────────────
-    # MODO URL PERSONALIZADA
-    # ──────────────────────────────────
-    elif modo == "🔗 URL personalizada":
-        st.markdown(
-            '<p class="mono-sm">Abre el sitio de eventos en tu navegador, copia la URL y pégala aquí. '
-            'La app intenta scraping directo y luego proxy automáticamente.</p>',
-            unsafe_allow_html=True,
-        )
-        url_input = st.text_input(
-            "URL del directorio",
-            placeholder="https://www.atletrack.com/eventos",
-            key="custom_url_input",
-        )
-        do_enrich2 = st.checkbox("Enriquecer con Google Search", value=False, key="chk_enrich2")
-
-        if st.button("Scrapear URL", key="btn_scrape_url"):
-            if not url_input.strip():
-                st.warning("Ingresa una URL primero")
-            else:
-                with st.spinner("Intentando scraping directo..."):
-                    rows = _scrape_direct(url_input.strip(), url_input.strip())
-                if not rows:
-                    with st.spinner("Directo bloqueado — intentando vía proxy..."):
-                        rows = _scrape_via_proxy(url_input.strip(), url_input.strip())
-                if not rows:
-                    # Try as RSS
-                    with st.spinner("Intentando como RSS feed..."):
-                        rows = _scrape_rss(url_input.strip(), url_input.strip())
-
-                if rows:
-                    if do_enrich2:
-                        with st.spinner("Enriqueciendo con Google..."):
-                            rows = enrich_with_google(rows)
-                    st.success(f"✅ {len(rows)} eventos encontrados")
-                    st.session_state["discovered"] = rows
-                else:
-                    st.error(
-                        "No se pudieron extraer eventos. El sitio posiblemente usa **JavaScript dinámico** "
-                        "(React/Angular/Vue) que no es scrapeable sin un navegador real.\n\n"
-                        "**Alternativas:**\n"
-                        "- Prueba con la URL del feed RSS: agrega `/feed/` al final de la URL\n"
-                        "- Usa **✏️ Entrada manual** para agregar el evento directamente"
-                    )
-
-    # ──────────────────────────────────
-    # MODO ENTRADA MANUAL
-    # ──────────────────────────────────
-    else:
-        st.markdown(
-            '<p class="mono-sm">Agrega eventos manualmente — útil cuando el scraping '
-            'no funciona o para eventos que encuentras navegando.</p>',
-            unsafe_allow_html=True,
-        )
-        with st.form("form_manual", clear_on_submit=True):
-            mc1, mc2 = st.columns(2)
-            with mc1:
-                m_evento  = st.text_input("Nombre del evento *", placeholder="Maratón de Bogotá 2025")
-                m_ciudad  = st.text_input("Ciudad", placeholder="Bogotá")
-                m_fecha   = st.text_input("Fecha", placeholder="2025-08-10")
-                m_tipo    = st.selectbox("Tipo", TIPOS, key="manual_tipo")
-            with mc2:
-                m_org     = st.text_input("Organizador", placeholder="Club Atlético XYZ")
-                m_email   = st.text_input("Email", placeholder="contacto@evento.com")
-                m_telefono= st.text_input("Teléfono", placeholder="310 123 4567")
-                m_insta   = st.text_input("Instagram", placeholder="@maratondebogota")
-            m_web     = st.text_input("Sitio web", placeholder="https://maratondebogota.com")
-            m_notas   = st.text_area("Notas", placeholder="Info adicional sobre el evento...", height=80)
-            submitted = st.form_submit_button("Agregar a la lista")
-
-        if submitted:
-            if not m_evento.strip():
-                st.warning("El nombre del evento es obligatorio")
-            else:
-                row = _new_row(
-                    evento=m_evento.strip(), tipo=m_tipo, fecha=m_fecha.strip(),
-                    ciudad=m_ciudad.strip(), organizador=m_org.strip(),
-                    email=m_email.strip(), telefono=m_telefono.strip(),
-                    instagram=m_insta.strip(), web=m_web.strip(),
-                    fuente="Manual", notas=m_notas.strip(),
-                )
-                prev = st.session_state.get("discovered", [])
-                prev.append(row)
-                st.session_state["discovered"] = prev
-                st.success(f"✅ Evento '{m_evento}' agregado a la lista")
-
-    # ── Results table ──────────────────
-    if "discovered" in st.session_state and st.session_state["discovered"]:
-        discovered = st.session_state["discovered"]
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown(
-            '<p class="terret-sub" style="font-size:0.8rem;letter-spacing:0.14em">'
-            + str(len(discovered)) + " EVENTOS — EDITA Y SELECCIONA PARA GUARDAR</p>",
-            unsafe_allow_html=True,
-        )
-
-        display_cols = ["Evento","Tipo","Fecha","Ciudad","Email","Telefono","Instagram","Web","Fuente"]
-        df_show = pd.DataFrame(discovered)[display_cols].copy()
-
-        edited = st.data_editor(
-            df_show,
-            use_container_width=True,
-            num_rows="dynamic",
-            key="editor_discovered",
-            column_config={
-                "Tipo": st.column_config.SelectboxColumn("Tipo", options=TIPOS),
-                "Web":  st.column_config.LinkColumn("Web"),
-            },
-        )
-
-        st.markdown(
-            '<p class="terret-sub" style="font-size:0.75rem;margin-top:8px;letter-spacing:0.1em">'
-            'SELECCIONA FILAS A GUARDAR</p>',
-            unsafe_allow_html=True,
-        )
-        seleccionados = []
-        for i, row in edited.iterrows():
-            uid = uuid.uuid4().hex[:6]
-            label = row["Evento"][:60] if row["Evento"] else f"Fila {i+1}"
-            if st.checkbox(label, value=True, key="sel_" + str(i) + "_" + uid):
-                seleccionados.append(i)
-
-        col_s1, col_s2 = st.columns([1, 4])
-        with col_s1:
-            if st.button("💾 Guardar seleccionados", key="btn_guardar"):
-                if not seleccionados:
-                    st.warning("No hay filas seleccionadas")
-                else:
-                    rows_to_save = []
-                    for i in seleccionados:
-                        base = discovered[i].copy()
-                        base.update({c: edited.iloc[i][c] for c in display_cols if c in edited.columns})
-                        rows_to_save.append(base)
-                    with st.spinner("Guardando en Google Sheets..."):
-                        added = save_leads(rows_to_save)
-                    st.success(f"✅ {added} leads guardados (duplicados omitidos)")
-                    del st.session_state["discovered"]
-                    st.rerun()
-        with col_s2:
-            if st.button("Limpiar lista", key="btn_limpiar"):
-                del st.session_state["discovered"]
-                st.rerun()
-
 def tab_crm():
     if st.button("🔄 Actualizar datos", key="btn_refresh_crm"):
         st.cache_resource.clear()
