@@ -235,10 +235,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-# ─────────────────────────────────────────────
-# AUTH
-# ─────────────────────────────────────────────
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -355,6 +351,42 @@ DEFAULT_SOURCES = [
     {"label": "Triatlon.com.co",           "url": "https://triatlon.com.co/eventos/"},
 ]
 
+
+# ─────────────────────────────────────────────
+# CONSTANTS
+# ─────────────────────────────────────────────
+SHEET_NAME = "Terret — Leads Eventos"
+WORKSHEET  = "Leads"
+COLUMNS    = ["ID","Evento","Tipo","Fecha","Ciudad","Organizador",
+              "Email","Telefono","Instagram","Web","Fuente","Estado",
+              "Notas","Fecha_Agregado"]
+ESTADOS    = ["Nuevo","Contactado","En negociación","Cerrado","Descartado"]
+TIPOS      = ["Running","Ciclismo","Trail","Triatlón","Duatlón","MTB","Otro"]
+
+DEFAULT_SOURCES = [
+    {"label": "Atletrack — Eventos",     "url": "https://www.atletrack.com/eventos"},
+    {"label": "Sportadictos — Carreras", "url": "https://sportadictos.com/categoria/carreras-populares/"},
+    {"label": "Correr.co",               "url": "https://correr.co/carreras/"},
+    {"label": "TravesiaDeportiva",       "url": "https://travesiadeportiva.com/"},
+    {"label": "Atletrack — Lista",       "url": "https://www.atletrack.com/eventos/list/"},
+]
+
+SCRAPER_ENDPOINT = "https://api.scraperapi.com/"
+
+EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+PHONE_RE = re.compile(r"(?:\+?57[\s-]?)?3\d{2}[\s-]?\d{3}[\s-]?\d{4}")
+INSTA_RE = re.compile(r"instagram\.com/([A-Za-z0-9_.]+)")
+DATE_RE  = re.compile(r"\d{1,2}[\s/\-\.]\w+[\s/\-\.]\d{2,4}|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}")
+
+CITIES_CO = [
+    "bogotá","bogota","medellín","medellin","cali","barranquilla","cartagena",
+    "bucaramanga","pereira","manizales","armenia","santa marta","ibagué","ibague",
+    "villavicencio","cúcuta","cucuta","pasto","montería","monteria","sincelejo",
+    "valledupar","neiva","popayán","popayan","tunja","rionegro","envigado",
+    "bello","itagüí","itagui","girardot","zipaquirá","zipaquira",
+]
+
+
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
@@ -377,93 +409,6 @@ def _new_row(evento="", tipo="", fecha="", ciudad="", organizador="",
         "Notas":          notas,
         "Fecha_Agregado": datetime.now().strftime("%Y-%m-%d"),
     }
-
-
-def _rows_from_js(js_events: list[dict]) -> list[dict]:
-    """Convert raw JS-scraped dicts into full CRM rows."""
-    rows = []
-    for e in js_events:
-        rows.append(_new_row(
-            evento    = e.get("nombre","")[:200],
-            tipo      = e.get("tipo","Running"),
-            fecha     = e.get("fecha",""),
-            ciudad    = e.get("ciudad","Colombia"),
-            organizador=e.get("organizador",""),
-            email     = e.get("email",""),
-            telefono  = e.get("telefono",""),
-            instagram = e.get("instagram",""),
-            web       = e.get("web",""),
-            fuente    = e.get("fuente",""),
-            notas     = e.get("notas",""),
-        ))
-    return rows
-
-
-# ─────────────────────────────────────────────
-# BROWSER-SIDE JS SCRAPER COMPONENT
-# This runs fetch() in the USER's browser (real IP),
-# bypassing any server-side IP blocks on Streamlit Cloud.
-# allorigins.win proxy works from real IPs, not from AWS.
-# ─────────────────────────────────────────────
-
-# ─────────────────────────────────────────────
-# SCRAPING ENGINE — via Google Apps Script proxy
-# GAS runs on Google servers → never blocked by any site
-# ─────────────────────────────────────────────
-import re as _re
-
-# ─────────────────────────────────────────────
-# SCRAPING ENGINE — ScraperAPI
-# api.scraperapi.com rota IPs residenciales,
-# bypasea bloqueos, corre desde Streamlit Cloud.
-# ─────────────────────────────────────────────
-
-EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
-PHONE_RE = re.compile(r"(?:\+?57[\s-]?)?3\d{2}[\s-]?\d{3}[\s-]?\d{4}")
-INSTA_RE = re.compile(r"instagram\.com/([A-Za-z0-9_.]+)")
-DATE_RE  = re.compile(r"\d{1,2}[\s/\-\.]\w+[\s/\-\.]\d{2,4}|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}")
-
-CITIES_CO = [
-    "bogotá","bogota","medellín","medellin","cali","barranquilla","cartagena",
-    "bucaramanga","pereira","manizales","armenia","santa marta","ibagué","ibague",
-    "villavicencio","cúcuta","cucuta","pasto","montería","monteria","sincelejo",
-    "valledupar","neiva","popayán","popayan","tunja","rionegro","envigado",
-    "bello","itagüí","itagui","girardot","zipaquirá","zipaquira",
-]
-
-DEFAULT_SOURCES = [
-    {"label": "Atletrack — Eventos",     "url": "https://www.atletrack.com/eventos"},
-    {"label": "Sportadictos — Carreras", "url": "https://sportadictos.com/categoria/carreras-populares/"},
-    {"label": "Correr.co",               "url": "https://correr.co/carreras/"},
-    {"label": "TravesiaDeportiva",       "url": "https://travesiadeportiva.com/"},
-    {"label": "Atletrack — Lista",       "url": "https://www.atletrack.com/eventos/list/"},
-]
-
-SCRAPER_API = "https://api.scraperapi.com/"
-
-
-def _scraper_key() -> str:
-    return st.secrets.get("SCRAPERAPI_KEY", "")
-
-
-def _fetch(url: str) -> str | None:
-    """Fetch a URL via ScraperAPI — bypasses IP blocks."""
-    key = _scraper_key()
-    if not key:
-        return None
-    params = {
-        "api_key":      key,
-        "url":          url,
-        "country_code": "co",
-        "render":       "false",
-    }
-    try:
-        r = requests.get(SCRAPER_API, params=params, timeout=60)
-        if r.status_code == 200 and len(r.text) > 500:
-            return r.text
-        return None
-    except Exception:
-        return None
 
 
 def _extract_contact(text: str) -> dict:
@@ -494,11 +439,34 @@ def _extract_city(text: str) -> str:
     return next((c.title() for c in CITIES_CO if c in tl), "Colombia")
 
 
+# ─────────────────────────────────────────────
+# SCRAPERAPI FETCH
+# ─────────────────────────────────────────────
+def _fetch(url: str) -> str | None:
+    key = st.secrets.get("SCRAPERAPI_KEY", "")
+    if not key:
+        return None
+    try:
+        r = requests.get(
+            SCRAPER_ENDPOINT,
+            params={"api_key": key, "url": url, "country_code": "co"},
+            timeout=60,
+        )
+        if r.status_code == 200 and len(r.text) > 500:
+            return r.text
+        return None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────
+# HTML PARSER
+# ─────────────────────────────────────────────
 def _parse_html(html: str, base_url: str, fuente: str) -> list[dict]:
     from urllib.parse import urljoin
-    soup = BeautifulSoup(html, "html.parser")
+    soup    = BeautifulSoup(html, "html.parser")
     results: list[dict] = []
-    seen: set[str] = set()
+    seen:    set[str]   = set()
 
     def add(name, href, text, fecha=""):
         name = (name or "").strip()[:180]
@@ -532,7 +500,7 @@ def _parse_html(html: str, base_url: str, fuente: str) -> list[dict]:
         if results:
             return results
 
-    # Strategy 2: WordPress <article>
+    # Strategy 2: WordPress articles
     articles = soup.find_all("article")
     if articles:
         for art in articles[:60]:
@@ -561,7 +529,7 @@ def _parse_html(html: str, base_url: str, fuente: str) -> list[dict]:
     for a in soup.find_all("a", href=True):
         name = a.get_text(strip=True)
         if (3 <= len(name.split()) <= 12 and len(name) < 120
-                and re.search(r"run|trail|cicl|triat|carrera|maraton|maratón|ciclismo|duatl|mtb|travesía|travesia|fondo", name, re.I)):
+                and re.search(r"run|trail|cicl|triat|carrera|maraton|maratón|ciclismo|duatl|mtb|travesía|fondo", name, re.I)):
             add(name, a["href"], name)
 
     return results
@@ -576,7 +544,7 @@ def tab_descubrir():
         unsafe_allow_html=True,
     )
 
-    if not _scraper_key():
+    if not st.secrets.get("SCRAPERAPI_KEY", ""):
         st.error(
             "**SCRAPERAPI_KEY no está en los secrets.**\n\n"
             "Agrega en Streamlit Cloud → App settings → Secrets:\n"
@@ -619,9 +587,9 @@ def tab_descubrir():
             return
 
         all_events: list[dict] = []
-        ok_msgs: list[str] = []
-        fail_msgs: list[str] = []
-        seen_names: set[str] = set()
+        ok_msgs:   list[str]  = []
+        fail_msgs: list[str]  = []
+        seen_names: set[str]  = set()
         n = len(sources)
 
         prog = st.progress(0, text="Iniciando...")
@@ -629,7 +597,7 @@ def tab_descubrir():
             prog.progress(int((i / n) * 95) + 2, text="Scrapeando " + src["label"] + "...")
             html = _fetch(src["url"])
             if not html:
-                fail_msgs.append(src["label"])
+                fail_msgs.append(src["label"] + " (no accesible)")
                 continue
             rows = _parse_html(html, src["url"], src["label"])
             new  = [r for r in rows if r["Evento"].lower() not in seen_names]
@@ -639,7 +607,7 @@ def tab_descubrir():
             if new:
                 ok_msgs.append(src["label"] + " — " + str(len(new)) + " eventos")
             else:
-                fail_msgs.append(src["label"] + " (HTML descargado pero sin eventos reconocibles)")
+                fail_msgs.append(src["label"] + " (sin eventos reconocibles en el HTML)")
 
         prog.progress(100, text="Listo")
         time.sleep(0.3)
@@ -653,9 +621,8 @@ def tab_descubrir():
         else:
             st.error(
                 "**0 eventos encontrados.**\n\n"
-                "El HTML se descargó correctamente pero los sitios pueden haber "
-                "cambiado su estructura. Prueba con **URL personalizada** pegando "
-                "la URL exacta que ves en tu navegador."
+                "El HTML llegó pero los sitios pueden haber cambiado su estructura. "
+                "Prueba con **URL personalizada** pegando la URL exacta de tu navegador."
             )
 
     # ── Results table ──────────────────────────────────────────
@@ -685,7 +652,7 @@ def tab_descubrir():
         seleccionados = []
         for i, row in edited.iterrows():
             uid = uuid.uuid4().hex[:6]
-            label = str(row["Evento"])[:60] if row["Evento"] else "Fila " + str(i+1)
+            label = str(row["Evento"])[:60] if row["Evento"] else "Fila " + str(i + 1)
             if st.checkbox(label, value=True, key="sel_" + str(i) + "_" + uid):
                 seleccionados.append(i)
 
@@ -709,29 +676,6 @@ def tab_descubrir():
             if st.button("Limpiar lista", key="btn_limpiar"):
                 del st.session_state["discovered"]
                 st.rerun()
-
-def generate_email_template(lead: dict) -> str:
-    nombre  = lead.get("Evento", "tu evento")
-    ciudad  = lead.get("Ciudad", "Colombia")
-    org     = lead.get("Organizador", "equipo organizador")
-    tipo    = lead.get("Tipo", "evento deportivo")
-    return (
-        f"Asunto: Alianza Terret × {nombre} — Equipamiento Oficial\n\n"
-        f"Hola {org},\n\n"
-        f"Mi nombre es [TU NOMBRE] y soy parte del equipo comercial de Terret, "
-        f"marca colombiana de running y ciclismo.\n\n"
-        f"Estamos muy emocionados con {nombre} en {ciudad} y nos encantaría "
-        f"explorar una alianza para ser el proveedor oficial de equipamiento para "
-        f"este {tipo.lower()}.\n\n"
-        f"Terret ofrece:\n"
-        f"• Kits personalizados para participantes y staff\n"
-        f"• Medias y accesorios técnicos de alto rendimiento\n"
-        f"• Visibilidad de marca en toda la comunicación del evento\n"
-        f"• Condiciones especiales para organizadores\n\n"
-        f"¿Podríamos agendar una llamada de 20 minutos esta semana?\n\n"
-        f"Quedo pendiente,\n[TU NOMBRE]\n"
-        f"Terret | www.terret.co\n"
-    )
 
 # ─────────────────────────────────────────────
 # HEADER
