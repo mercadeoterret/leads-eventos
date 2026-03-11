@@ -240,16 +240,35 @@ COLUMNS     = ["ID","Evento","Tipo","Fecha","Ciudad","Organizador",
 ESTADOS     = ["Nuevo","Contactado","En negociación","Cerrado","Descartado"]
 TIPOS       = ["Running","Ciclismo","Trail","Triatlón","Duatlón","MTB","Otro"]
 
-ATLETRACK_URL     = "https://www.atletrack.com/eventos"
-SPORTADICTOS_URL  = "https://sportadictos.com/categoria/carreras-populares/"
+ATLETRACK_URLS = [
+    "https://www.atletrack.com/eventos",
+    "https://www.atletrack.com/eventos/list/",
+    "https://www.atletrack.com/calendario",
+]
+SPORTADICTOS_URLS = [
+    "https://sportadictos.com/categoria/carreras-populares/",
+    "https://sportadictos.com/category/carreras/",
+    "https://sportadictos.com/carreras/",
+]
+EXTRA_SOURCES = [
+    ("https://correr.co/carreras/",            "Correr.co"),
+    ("https://www.carrerasenruta.com/eventos/", "CarrerasEnRuta"),
+    ("https://runningcolombia.co/eventos/",     "RunningColombia"),
+    ("https://triatlon.com.co/eventos/",        "Triatlon.com.co"),
+]
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/122.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "es-CO,es;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
 }
 
 # ─────────────────────────────────────────────
@@ -373,19 +392,41 @@ DATE_RE     = re.compile(
 )
 
 
-def _safe_get(url: str, timeout: int = 10) -> BeautifulSoup | None:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=timeout)
-        r.raise_for_status()
-        return BeautifulSoup(r.text, "html.parser")
-    except Exception:
-        return None
+CITIES_CO = [
+    "bogotá","bogota","medellín","medellin","cali","barranquilla","cartagena",
+    "bucaramanga","pereira","manizales","armenia","santa marta","ibagué","ibague",
+    "villavicencio","cúcuta","cucuta","pasto","montería","monteria","sincelejo",
+    "valledupar","neiva","popayán","popayan","tunja","rionegro","envigado",
+    "bello","itagüí","itagui","girardot","fusagasugá","fusagasuga","zipaquirá","zipaquira",
+]
+
+
+def _safe_get(url: str, timeout: int = 14) -> BeautifulSoup | None:
+    """GET with retries and multiple User-Agent fallbacks."""
+    uas = [
+        HEADERS["User-Agent"],
+        "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    ]
+    for ua in uas:
+        h = {**HEADERS, "User-Agent": ua}
+        try:
+            r = requests.get(url, headers=h, timeout=timeout,
+                             allow_redirects=True)
+            if r.status_code == 200 and len(r.text) > 500:
+                return BeautifulSoup(r.text, "html.parser")
+        except Exception:
+            continue
+    return None
 
 
 def _extract_contact_info(text: str) -> dict:
     emails = EMAIL_RE.findall(text)
     phones = PHONE_RE.findall(text)
     instas = INSTA_RE.findall(text)
+    # filter out common false-positive domains
+    bad = {"example","sentry","wix","wordpress","schema","google","w3","jquery"}
+    emails = [e for e in emails if e.split("@")[-1].split(".")[0].lower() not in bad]
     return {
         "Email":     emails[0] if emails else "",
         "Telefono":  phones[0] if phones else "",
@@ -395,159 +436,207 @@ def _extract_contact_info(text: str) -> dict:
 
 def _guess_tipo(text: str) -> str:
     t = text.lower()
-    if any(k in t for k in ["cicl","bic","bike","mtb"]): return "Ciclismo"
+    if any(k in t for k in ["cicl","bicicleta","bike","mtb","gran fondo"]): return "Ciclismo"
+    if "mtb" in t: return "MTB"
     if "trail" in t: return "Trail"
     if "triat" in t: return "Triatlón"
     if "duat"  in t: return "Duatlón"
-    if "mtb"   in t: return "MTB"
     return "Running"
+
+
+def _extract_city(text: str) -> str:
+    tl = text.lower()
+    return next((c.title() for c in CITIES_CO if c in tl), "Colombia")
+
+
+def _abs_url(href: str, base: str) -> str:
+    if not href:
+        return ""
+    if href.startswith("http"):
+        return href
+    from urllib.parse import urljoin
+    return urljoin(base, href)
 
 
 def _new_row(evento="", tipo="", fecha="", ciudad="", organizador="",
              email="", telefono="", instagram="", web="", fuente="",
              notas="") -> dict:
     return {
-        "ID":            uuid.uuid4().hex[:8].upper(),
-        "Evento":        evento,
-        "Tipo":          tipo,
-        "Fecha":         fecha,
-        "Ciudad":        ciudad,
-        "Organizador":   organizador,
-        "Email":         email,
-        "Telefono":      telefono,
-        "Instagram":     instagram,
-        "Web":           web,
-        "Fuente":        fuente,
-        "Estado":        "Nuevo",
-        "Notas":         notas,
+        "ID":             uuid.uuid4().hex[:8].upper(),
+        "Evento":         evento,
+        "Tipo":           tipo,
+        "Fecha":          fecha,
+        "Ciudad":         ciudad,
+        "Organizador":    organizador,
+        "Email":          email,
+        "Telefono":       telefono,
+        "Instagram":      instagram,
+        "Web":            web,
+        "Fuente":         fuente,
+        "Estado":         "Nuevo",
+        "Notas":          notas,
         "Fecha_Agregado": datetime.now().strftime("%Y-%m-%d"),
     }
 
 
+def _parse_events_generic(soup: BeautifulSoup, base_url: str, fuente: str) -> list[dict]:
+    """
+    Universal event extractor — tries multiple selector strategies in order.
+    Returns list of row dicts.
+    """
+    results = []
+    seen    = set()
+
+    # Strategy 1: The Events Calendar (tribe) — used by Atletrack, many WP sites
+    tribe_events = soup.find_all("article", class_=re.compile(r"tribe_event|type-tribe", re.I))
+    if tribe_events:
+        for art in tribe_events[:50]:
+            title_a = art.find("a", class_=re.compile(r"tribe-event-url|url", re.I)) or art.find("h2 a") or art.find("h3 a")
+            name    = title_a.get_text(strip=True) if title_a else ""
+            href    = title_a.get("href","") if title_a else ""
+            # date
+            date_tag = art.find("abbr", class_=re.compile(r"tribe|date", re.I))
+            fecha    = date_tag.get("title","") or date_tag.get_text(strip=True) if date_tag else ""
+            if not fecha:
+                time_tag = art.find("time")
+                fecha = time_tag.get("datetime","") or time_tag.get_text(strip=True) if time_tag else ""
+            # venue / city
+            venue    = art.find(class_=re.compile(r"tribe-venue|location|venue", re.I))
+            ciudad   = _extract_city(venue.get_text() if venue else art.get_text())
+            text     = art.get_text(" ", strip=True)
+            contact  = _extract_contact_info(text)
+            if name and name not in seen:
+                seen.add(name)
+                results.append(_new_row(
+                    evento=name, tipo=_guess_tipo(name+" "+text),
+                    fecha=fecha, ciudad=ciudad,
+                    web=_abs_url(href, base_url), fuente=fuente,
+                    **contact,
+                ))
+        if results:
+            return results
+
+    # Strategy 2: Standard WordPress posts / articles
+    articles = soup.find_all("article")
+    if articles:
+        for art in articles[:50]:
+            title_tag = art.find(["h1","h2","h3","h4"])
+            name      = title_tag.get_text(strip=True) if title_tag else ""
+            link_tag  = (title_tag.find("a") if title_tag else None) or art.find("a", href=True)
+            href      = link_tag.get("href","") if link_tag else ""
+            time_tag  = art.find("time")
+            fecha     = (time_tag.get("datetime","") or time_tag.get_text(strip=True)) if time_tag else ""
+            if not fecha:
+                m = DATE_RE.search(art.get_text())
+                fecha = m.group(0) if m else ""
+            text    = art.get_text(" ", strip=True)
+            contact = _extract_contact_info(text)
+            ciudad  = _extract_city(text)
+            if name and name not in seen and len(name) > 4:
+                seen.add(name)
+                results.append(_new_row(
+                    evento=name, tipo=_guess_tipo(name+" "+text),
+                    fecha=fecha, ciudad=ciudad,
+                    web=_abs_url(href, base_url), fuente=fuente,
+                    **contact,
+                ))
+        if results:
+            return results
+
+    # Strategy 3: divs/li with event/card/item class
+    for tag in ["div", "li", "section"]:
+        cards = soup.find_all(
+            tag,
+            class_=re.compile(r"event|card|item|race|carrera|resultado|run", re.I),
+        )
+        for c in cards[:50]:
+            links = c.find_all("a", href=True)
+            name  = links[0].get_text(strip=True) if links else c.get_text(strip=True)[:80]
+            href  = links[0]["href"] if links else ""
+            text  = c.get_text(" ", strip=True)
+            m     = DATE_RE.search(text)
+            fecha = m.group(0) if m else ""
+            contact = _extract_contact_info(text)
+            ciudad  = _extract_city(text)
+            if name and name not in seen and len(name) > 4:
+                seen.add(name)
+                results.append(_new_row(
+                    evento=name, tipo=_guess_tipo(name+" "+text),
+                    fecha=fecha, ciudad=ciudad,
+                    web=_abs_url(href, base_url), fuente=fuente,
+                    **contact,
+                ))
+        if results:
+            return results
+
+    # Strategy 4: All <a> links that look like event names (≥3 words, title-case)
+    all_links = soup.find_all("a", href=True)
+    for a in all_links:
+        name = a.get_text(strip=True)
+        href = a["href"]
+        if (len(name.split()) >= 3
+                and len(name) < 120
+                and any(k in name.lower() for k in
+                        ["run","trail","cicl","triat","carrera","maraton","maratón",
+                         "km","ciclismo","duatl","mtb","cross","fondo","media"])):
+            text    = name
+            contact = _extract_contact_info(text)
+            ciudad  = _extract_city(text)
+            m       = DATE_RE.search(text)
+            if name not in seen:
+                seen.add(name)
+                results.append(_new_row(
+                    evento=name, tipo=_guess_tipo(name),
+                    fecha=m.group(0) if m else "", ciudad=ciudad,
+                    web=_abs_url(href, base_url), fuente=fuente,
+                    **contact,
+                ))
+    return results
+
+
 # ── Atletrack ──
 def scrape_atletrack() -> list[dict]:
-    results = []
-    soup = _safe_get(ATLETRACK_URL)
-    if not soup:
-        return results
-    cards = (
-        soup.find_all("div", class_=re.compile(r"event|card|item", re.I))
-        or soup.find_all("article")
-        or soup.find_all("li", class_=re.compile(r"event|race", re.I))
-    )
-    if not cards:
-        # fallback: all <a> with date-like text nearby
-        cards = soup.find_all("a", href=re.compile(r"event|carrera|race", re.I))[:20]
-
-    seen = set()
-    for card in cards[:40]:
-        text = card.get_text(" ", strip=True)
-        links = card.find_all("a", href=True)
-        name  = ""
-        web   = ""
-        if links:
-            name = links[0].get_text(strip=True)
-            href = links[0]["href"]
-            web  = href if href.startswith("http") else "https://www.atletrack.com" + href
-        if not name:
-            name = text[:80].strip()
-        if not name or name in seen:
+    for url in ATLETRACK_URLS:
+        soup = _safe_get(url)
+        if not soup:
             continue
-        seen.add(name)
-        dates = DATE_RE.findall(text)
-        contact = _extract_contact_info(text)
-        # city heuristic
-        cities = ["bogotá","medellín","cali","barranquilla","cartagena",
-                  "bucaramanga","pereira","manizales","armenia","santa marta"]
-        ciudad = next((c.title() for c in cities if c in text.lower()), "Colombia")
-
-        results.append(_new_row(
-            evento=name,
-            tipo=_guess_tipo(text),
-            fecha=dates[0] if dates else "",
-            ciudad=ciudad,
-            web=web,
-            fuente="Atletrack",
-            **{k: v for k, v in contact.items()},
-        ))
-    return results
+        results = _parse_events_generic(soup, url, "Atletrack")
+        if results:
+            return results
+    return []
 
 
 # ── Sportadictos ──
 def scrape_sportadictos() -> list[dict]:
-    results = []
-    soup = _safe_get(SPORTADICTOS_URL)
-    if not soup:
-        return results
-    articles = soup.find_all("article") or soup.find_all("div", class_=re.compile(r"post|entry"))
-    seen = set()
-    for art in articles[:30]:
-        title_tag = art.find(["h2","h3","h4"])
-        name = title_tag.get_text(strip=True) if title_tag else ""
-        if not name or name in seen:
+    for url in SPORTADICTOS_URLS:
+        soup = _safe_get(url)
+        if not soup:
             continue
-        seen.add(name)
-        link_tag = art.find("a", href=True)
-        web = link_tag["href"] if link_tag else ""
-        text = art.get_text(" ", strip=True)
-        dates = DATE_RE.findall(text)
-        contact = _extract_contact_info(text)
-        cities = ["bogotá","medellín","cali","barranquilla","cartagena",
-                  "bucaramanga","pereira","manizales","armenia","santa marta"]
-        ciudad = next((c.title() for c in cities if c in text.lower()), "Colombia")
-        results.append(_new_row(
-            evento=name,
-            tipo=_guess_tipo(name + " " + text),
-            fecha=dates[0] if dates else "",
-            ciudad=ciudad,
-            web=web,
-            fuente="Sportadictos",
-            **{k: v for k, v in contact.items()},
-        ))
-    return results
+        results = _parse_events_generic(soup, url, "Sportadictos")
+        if results:
+            return results
+    return []
 
 
 # ── Custom URL ──
 def scrape_custom_url(url: str) -> list[dict]:
-    results = []
     soup = _safe_get(url)
     if not soup:
-        return results
-    candidates = (
-        soup.find_all("article")
-        or soup.find_all("div", class_=re.compile(r"event|card|item|race|carrera", re.I))
-        or soup.find_all("li", class_=re.compile(r"event|item|race", re.I))
-    )
-    if not candidates:
-        # last resort: all block-level elements with substantial text
-        candidates = [t for t in soup.find_all(["div","section","article"])
-                      if len(t.get_text(strip=True)) > 40][:30]
+        return []
+    return _parse_events_generic(soup, url, url)
 
-    seen = set()
-    for c in candidates[:40]:
-        text  = c.get_text(" ", strip=True)
-        links = c.find_all("a", href=True)
-        name  = links[0].get_text(strip=True) if links else text[:80].strip()
-        if not name or name in seen:
+
+# ── Extra fallback sources ──
+def scrape_extra_sources() -> list[dict]:
+    """Try additional Colombian running/cycling directories."""
+    all_results = []
+    for url, name in EXTRA_SOURCES:
+        soup = _safe_get(url)
+        if not soup:
             continue
-        seen.add(name)
-        href    = links[0]["href"] if links else ""
-        web     = href if href.startswith("http") else (url.rstrip("/") + "/" + href.lstrip("/")) if href else ""
-        dates   = DATE_RE.findall(text)
-        contact = _extract_contact_info(text)
-        cities  = ["bogotá","medellín","cali","barranquilla","cartagena",
-                   "bucaramanga","pereira","manizales","armenia","santa marta"]
-        ciudad  = next((c2.title() for c2 in cities if c2 in text.lower()), "")
-        results.append(_new_row(
-            evento=name,
-            tipo=_guess_tipo(name + " " + text),
-            fecha=dates[0] if dates else "",
-            ciudad=ciudad,
-            web=web,
-            fuente=url,
-            **{k: v for k, v in contact.items()},
-        ))
-    return results
+        r = _parse_events_generic(soup, url, name)
+        all_results.extend(r)
+    return all_results
 
 
 # ── Google search enrichment (googlesearch-python) ──
@@ -562,7 +651,7 @@ def enrich_with_google(events: list[dict]) -> list[dict]:
         if ev.get("Email") and ev.get("Telefono"):
             enriched.append(ev)
             continue
-        query = f'"{ev["Evento"]} Colombia" contacto organizador email'
+        query = '"' + ev["Evento"] + ' Colombia" contacto organizador email'
         try:
             urls = list(gsearch(query, num_results=3, lang="es", sleep_interval=1))
         except Exception:
@@ -642,34 +731,79 @@ def tab_descubrir():
     events_raw: list[dict] = []
 
     if modo.startswith("🤖"):
-        col1, col2, col3 = st.columns([1, 1, 2])
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
         with col1:
-            do_atletrack    = st.checkbox("Atletrack.com",    value=True, key="chk_atletrack")
+            do_atletrack    = st.checkbox("Atletrack.com",      value=True,  key="chk_atletrack")
         with col2:
-            do_sportadictos = st.checkbox("Sportadictos.com", value=True, key="chk_sportadictos")
+            do_sportadictos = st.checkbox("Sportadictos.com",   value=True,  key="chk_sportadictos")
         with col3:
-            do_enrich = st.checkbox("Enriquecer con Google Search (más lento)", value=False, key="chk_enrich")
+            do_extra        = st.checkbox("+ Otras fuentes CO", value=True,  key="chk_extra")
+        with col4:
+            do_enrich       = st.checkbox("Enriquecer con Google Search (lento)", value=False, key="chk_enrich")
 
         if st.button("Buscar eventos", key="btn_buscar_auto"):
-            with st.spinner("Scrapeando fuentes..."):
-                if do_atletrack:
-                    at = scrape_atletrack()
-                    st.info(f"Atletrack: {len(at)} eventos encontrados")
-                    events_raw.extend(at)
-                if do_sportadictos:
-                    sp = scrape_sportadictos()
-                    st.info(f"Sportadictos: {len(sp)} eventos encontrados")
-                    events_raw.extend(sp)
-                if do_enrich and events_raw:
-                    with st.spinner("Enriqueciendo con Google..."):
-                        events_raw = enrich_with_google(events_raw)
-            st.session_state["discovered"] = events_raw
+            progress = st.progress(0, text="Iniciando búsqueda...")
+            all_events: list[dict] = []
+            step = 0
+            total_steps = sum([do_atletrack, do_sportadictos, do_extra]) or 1
+
+            if do_atletrack:
+                progress.progress(int(step/total_steps*80)+5, text="Scrapeando Atletrack.com...")
+                at = scrape_atletrack()
+                if at:
+                    st.success(f"✅ Atletrack: {len(at)} eventos encontrados")
+                else:
+                    st.warning("⚠️ Atletrack: 0 eventos — el sitio puede estar bloqueando temporalmente. Prueba con URL personalizada.")
+                all_events.extend(at)
+                step += 1
+
+            if do_sportadictos:
+                progress.progress(int(step/total_steps*80)+5, text="Scrapeando Sportadictos.com...")
+                sp = scrape_sportadictos()
+                if sp:
+                    st.success(f"✅ Sportadictos: {len(sp)} eventos encontrados")
+                else:
+                    st.warning("⚠️ Sportadictos: 0 eventos — el sitio puede estar bloqueando temporalmente.")
+                all_events.extend(sp)
+                step += 1
+
+            if do_extra:
+                progress.progress(int(step/total_steps*80)+5, text="Buscando en fuentes adicionales...")
+                ex = scrape_extra_sources()
+                if ex:
+                    st.success(f"✅ Fuentes adicionales: {len(ex)} eventos encontrados")
+                all_events.extend(ex)
+                step += 1
+
+            if do_enrich and all_events:
+                progress.progress(90, text="Enriqueciendo con Google Search...")
+                all_events = enrich_with_google(all_events)
+
+            progress.progress(100, text="Listo")
+            time.sleep(0.4)
+            progress.empty()
+
+            if not all_events:
+                st.error(
+                    "**0 eventos en total.** Posibles causas:\n\n"
+                    "• Los sitios bloquean IPs de Streamlit Cloud (muy común)\n"
+                    "• Cambiaron su estructura HTML\n\n"
+                    "**Solución rápida:** usa el modo **URL personalizada** y pega directamente "
+                    "la URL de cualquier directorio de eventos que puedas abrir en tu navegador."
+                )
+            else:
+                st.session_state["discovered"] = all_events
 
     else:
         url_input = st.text_input(
             "URL del directorio de eventos",
             placeholder="https://ejemplo.com/eventos",
             key="custom_url_input",
+        )
+        st.markdown(
+            '<p class="mono-sm">Pega la URL de cualquier página con listado de eventos: '
+            'Atletrack, Sportadictos, RunColombia, Facebook Events, etc.</p>',
+            unsafe_allow_html=True,
         )
         do_enrich2 = st.checkbox("Enriquecer con Google Search", value=False, key="chk_enrich2")
         if st.button("Scrapear URL", key="btn_scrape_url"):
@@ -678,8 +812,15 @@ def tab_descubrir():
                     events_raw = scrape_custom_url(url_input)
                     if do_enrich2 and events_raw:
                         events_raw = enrich_with_google(events_raw)
-                st.info(f"Encontrados {len(events_raw)} eventos en la URL")
-                st.session_state["discovered"] = events_raw
+                if events_raw:
+                    st.success(f"✅ {len(events_raw)} eventos encontrados")
+                    st.session_state["discovered"] = events_raw
+                else:
+                    st.error(
+                        "No se pudieron extraer eventos de esa URL.\n\n"
+                        "Puede que el sitio bloquee scraping o use JavaScript dinámico. "
+                        "Intenta con otra URL del mismo sitio (ej: página 2, versión móvil)."
+                    )
             else:
                 st.warning("Ingresa una URL primero")
 
@@ -708,7 +849,6 @@ def tab_descubrir():
             },
         )
 
-        # Checkboxes to select rows
         st.markdown('<p class="terret-sub" style="font-size:0.75rem;margin-top:8px">Selecciona filas a guardar</p>', unsafe_allow_html=True)
         seleccionados = []
         for i, row in edited.iterrows():
