@@ -418,9 +418,9 @@ def _extract_contact(text: str) -> dict:
     bad = {"example","wordpress","schema","google","w3","jquery","sentry","wix","noreply"}
     emails = [e for e in emails if e.split("@")[-1].split(".")[0].lower() not in bad]
     return {
-        "Email":     emails[0] if emails else "",
-        "Telefono":  phones[0] if phones else "",
-        "Instagram": "@" + instas[0] if instas else "",
+        "email":     emails[0] if emails else "",
+        "telefono":  phones[0] if phones else "",
+        "instagram": "@" + instas[0] if instas else "",
     }
 
 
