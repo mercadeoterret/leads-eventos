@@ -4,6 +4,4 @@ google-auth>=2.28.0
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 pandas>=2.0.0
-feedparser>=6.0.11
-googlesearch-python>=1.2.3
 lxml>=4.9.0
